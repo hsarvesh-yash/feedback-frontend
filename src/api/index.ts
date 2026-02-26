@@ -87,26 +87,35 @@ function persist() {
 export const submitFeedback = async (data: FeedbackData) => {
     const database = await openDb();
     const created_at = new Date().toISOString();
-    const stmt = database.prepare(
+    // Use `run` which is simpler and compatible across sql.js builds.
+    database.run(
         `INSERT INTO feedback (rating, feedback_primary, feedback_secondary, consent_to_publish, display_name, organization, service_category, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?);`
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?);`,
+        [
+            data.rating,
+            data.feedback_primary,
+            data.feedback_secondary || null,
+            data.consent_to_publish ? 1 : 0,
+            data.display_name || null,
+            data.organization || null,
+            data.service_category || null,
+            created_at,
+        ]
     );
-    stmt.run([
-        data.rating,
-        data.feedback_primary,
-        data.feedback_secondary || null,
-        data.consent_to_publish ? 1 : 0,
-        data.display_name || null,
-        data.organization || null,
-        data.service_category || null,
-        created_at,
-    ]);
-    stmt.free();
     persist();
-    // return inserted row id
+    // return inserted row id (may be 0 on some builds if rowid handling differs)
     const res = database.exec('SELECT last_insert_rowid() as id');
     const id = res && res[0] && res[0].values && res[0].values[0] ? res[0].values[0][0] : undefined;
     return { id, created_at };
+};
+
+// Helper for debugging stored rows count
+export const debugCount = async () => {
+    const database = await openDb();
+    const res = database.exec('SELECT COUNT(*) AS cnt FROM feedback;');
+    if (!res || res.length === 0) return { cnt: 0 };
+    const val = res[0].values && res[0].values[0] ? res[0].values[0][0] : 0;
+    return { cnt: val };
 };
 
 export const getAllFeedback = async (): Promise<FeedbackData[]> => {
