@@ -1,0 +1,18 @@
+#!/usr/bin/env sh
+. "$(dirname "$0")/_/husky.sh"
+
+# If new components are being added under src/components, bump major version so
+# it is included in the same commit.
+ADDED_FILES=$(git diff --cached --name-status --diff-filter=A | awk '{print $2}')
+for f in $ADDED_FILES; do
+  case "$f" in
+    src/components/*)
+      echo "New component added: $f — bumping major version"
+      node ./scripts/bump-version.js major
+      git add package.json
+      break
+      ;;
+  esac
+done
+
+exit 0

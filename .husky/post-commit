@@ -1,0 +1,14 @@
+#!/usr/bin/env sh
+. "$(dirname "$0")/_/husky.sh"
+
+# Skip if the commit message already contains the marker so we don't loop.
+LAST_MSG=$(git log -1 --pretty=%B)
+echo "$LAST_MSG" | grep -q "version-bump-hook" && exit 0 || true
+
+# Bump patch version after each commit and create a separate commit for it.
+echo "Bumping patch version after commit..."
+node ./scripts/bump-version.js patch
+git add package.json
+git commit -m "chore: bump patch version (post-commit) [version-bump-hook]" || true
+
+exit 0
