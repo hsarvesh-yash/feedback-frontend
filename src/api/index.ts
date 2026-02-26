@@ -87,12 +87,27 @@ function persist() {
 export const submitFeedback = async (data: FeedbackData) => {
     const database = await openDb();
     const created_at = new Date().toISOString();
+    // Basic validation to prevent NOT NULL constraint failures
+    if (data == null) throw new Error('Missing feedback data');
+    if (!Number.isInteger(data.rating) || data.rating < 1 || data.rating > 5) {
+        throw new Error('Invalid or missing `rating` - expected integer 1..5');
+    }
+    if (!data.feedback_primary || String(data.feedback_primary).trim().length === 0) {
+        throw new Error('`feedback_primary` is required');
+    }
+    // Coerce rating to integer and ensure required fields are present
+    const ratingVal = Number(data.rating);
+    if (!Number.isInteger(ratingVal) || ratingVal < 1 || ratingVal > 5) {
+        throw new Error('Invalid or missing `rating` - expected integer 1..5');
+    }
+
     // Use `run` which is simpler and compatible across sql.js builds.
-    database.run(
+    try {
+        database.run(
         `INSERT INTO feedback (rating, feedback_primary, feedback_secondary, consent_to_publish, display_name, organization, service_category, created_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?);`,
         [
-            data.rating,
+            ratingVal,
             data.feedback_primary,
             data.feedback_secondary || null,
             data.consent_to_publish ? 1 : 0,
@@ -102,6 +117,11 @@ export const submitFeedback = async (data: FeedbackData) => {
             created_at,
         ]
     );
+    } catch (err: any) {
+        // translate common SQL errors into friendlier messages
+        const msg = err && err.message ? String(err.message) : 'Database error';
+        throw new Error(msg.includes('NOT NULL') ? 'Missing required field. Please complete all required inputs.' : msg);
+    }
     persist();
     // return inserted row id (may be 0 on some builds if rowid handling differs)
     const res = database.exec('SELECT last_insert_rowid() as id');
@@ -138,4 +158,22 @@ export const clearDatabase = async () => {
     db = null;
     localStorage.removeItem(STORAGE_KEY);
 };
+
+// DEV DEBUG HELPERS: expose some functions to window for quick inspection during development
+if (typeof window !== 'undefined') {
+    try {
+        (window as any).__feedbackApi = (window as any).__feedbackApi || {};
+        (window as any).__feedbackApi.debugCount = debugCount;
+        (window as any).__feedbackApi.getAllFeedback = getAllFeedback;
+        (window as any).__feedbackApi.submitFeedback = submitFeedback;
+        (window as any).__feedbackApi.clearDatabase = clearDatabase;
+        (window as any).__feedbackApi.exportDbBase64 = async () => {
+            const database = await openDb();
+            const u8 = database.export();
+            return uint8ArrayToBase64(u8);
+        };
+    } catch (e) {
+        // no-op in non-browser environments
+    }
+}
 

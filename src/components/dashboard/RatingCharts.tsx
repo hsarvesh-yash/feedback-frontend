@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState, useEffect } from 'react';
 import {
     BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
     PieChart, Pie, Cell, Legend
@@ -12,6 +12,8 @@ interface RatingChartsProps {
 const COLORS = ['#ef4444', '#f97316', '#eab308', '#84cc16', '#22c55e'];
 
 export function RatingCharts({ data }: RatingChartsProps) {
+    const [mounted, setMounted] = useState(false);
+    useEffect(() => setMounted(true), []);
 
     const ratingDistribution = useMemo(() => {
         const dist = [
@@ -44,7 +46,8 @@ export function RatingCharts({ data }: RatingChartsProps) {
             <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm">
                 <h3 className="text-lg font-semibold text-slate-800 mb-6">Rating Distribution</h3>
                 <div className="h-[300px] w-full">
-                    <ResponsiveContainer width="100%" height="100%">
+                    {mounted && (
+                        <ResponsiveContainer width="100%" height="100%">
                         <BarChart data={ratingDistribution} margin={{ top: 5, right: 30, left: -20, bottom: 5 }}>
                             <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
                             <XAxis dataKey="name" tick={{ fill: '#64748b', fontSize: 12 }} axisLine={false} tickLine={false} />
@@ -59,7 +62,8 @@ export function RatingCharts({ data }: RatingChartsProps) {
                                 ))}
                             </Bar>
                         </BarChart>
-                    </ResponsiveContainer>
+                        </ResponsiveContainer>
+                    )}
                 </div>
             </div>
 
@@ -68,7 +72,8 @@ export function RatingCharts({ data }: RatingChartsProps) {
                 <h3 className="text-lg font-semibold text-slate-800 mb-6">Feedback by Category</h3>
                 <div className="h-[300px] w-full">
                     {categoryDistribution.length > 0 ? (
-                        <ResponsiveContainer width="100%" height="100%">
+                        mounted ? (
+                            <ResponsiveContainer width="100%" height="100%">
                             <PieChart>
                                 <Pie
                                     data={categoryDistribution}
@@ -88,7 +93,8 @@ export function RatingCharts({ data }: RatingChartsProps) {
                                 />
                                 <Legend iconType="circle" />
                             </PieChart>
-                        </ResponsiveContainer>
+                            </ResponsiveContainer>
+                        ) : null
                     ) : (
                         <div className="h-full flex items-center justify-center text-slate-400">No category data</div>
                     )}
