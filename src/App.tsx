@@ -1,5 +1,5 @@
 import React from 'react';
-import { BrowserRouter, Routes, Route, Link } from 'react-router-dom';
+import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { FeedbackForm } from './components/FeedbackForm';
 import { DashboardDataView } from './components/dashboard/DashboardDataView';
 
@@ -7,10 +7,7 @@ function PublicFormView() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-primary-50 py-12 px-4 sm:px-6 lg:px-8 flex flex-col items-center">
       <div className="w-full max-w-3xl">
-        <div className="text-center mb-10 relative">
-          <Link to="/dashboard" className="absolute right-0 top-0 text-xs font-medium text-primary-600 hover:text-primary-800 bg-white px-3 py-1 rounded-full shadow-sm border border-slate-200 transition-colors">
-            Admin Login &rarr;
-          </Link>
+          <div className="text-center mb-10 relative">
           <h1 className="text-4xl font-extrabold text-slate-900 tracking-tight mb-3">
             Help Us Improve
           </h1>

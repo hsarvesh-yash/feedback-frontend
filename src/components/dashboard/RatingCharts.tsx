@@ -6,7 +6,7 @@ import {
 import type { FeedbackData } from '../../api';
 
 interface RatingChartsProps {
-    data: FeedbackData[];
+    data?: FeedbackData[];
 }
 
 const COLORS = ['#ef4444', '#f97316', '#eab308', '#84cc16', '#22c55e'];
@@ -21,8 +21,8 @@ export function RatingCharts({ data }: RatingChartsProps) {
             { name: '4 Stars', count: 0 },
             { name: '5 Stars', count: 0 },
         ];
-        data.forEach(fb => {
-            if (fb.rating >= 1 && fb.rating <= 5) {
+        (data || []).forEach(fb => {
+            if (fb && fb.rating >= 1 && fb.rating <= 5) {
                 dist[fb.rating - 1].count += 1;
             }
         });
@@ -31,8 +31,8 @@ export function RatingCharts({ data }: RatingChartsProps) {
 
     const categoryDistribution = useMemo(() => {
         const cats: Record<string, number> = {};
-        data.forEach(fb => {
-            const cat = fb.service_category || 'Uncategorized';
+        (data || []).forEach(fb => {
+            const cat = (fb && fb.service_category) || 'Uncategorized';
             cats[cat] = (cats[cat] || 0) + 1;
         });
         return Object.keys(cats).map(key => ({ name: key, value: cats[key] }));
