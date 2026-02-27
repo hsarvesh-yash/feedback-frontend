@@ -1,8 +1,5 @@
-// Client-side storage using sql.js (SQLite compiled to WebAssembly).
-// The database is persisted to `localStorage` as a base64-encoded SQLite file.
-
-import initSqlJs from 'sql.js';
-import type { Database, SqlJsStatic } from 'sql.js';
+// Lightweight CSV-backed client storage for feedback records.
+// Stores a comma-separated CSV string in localStorage under `feedback_csv_v1`.
 
 export interface FeedbackData {
     id?: number;
@@ -16,164 +13,207 @@ export interface FeedbackData {
     created_at?: string;
 }
 
-let SQL: SqlJsStatic | null = null;
-let db: Database | null = null;
+const STORAGE_KEY = 'feedback_csv_v1';
+const ID_SEQ_KEY = 'feedback_csv_id_v1';
 
-const STORAGE_KEY = 'feedback_db_v1';
+// Optional remote API base URL (set Vite env var VITE_FEEDBACK_API_URL)
+const REMOTE_API_BASE = (import.meta as any).env?.VITE_FEEDBACK_API_URL || '';
+const useRemote = Boolean(REMOTE_API_BASE);
 
-function uint8ArrayToBase64(u8: Uint8Array) {
-    let CHUNK_SIZE = 0x8000;
-    let index = 0;
-    const length = u8.length;
-    let result = '';
-    let slice;
-    while (index < length) {
-        slice = u8.subarray(index, Math.min(index + CHUNK_SIZE, length));
-        result += String.fromCharCode.apply(null, Array.from(slice));
-        index += CHUNK_SIZE;
+function csvEscape(value: any) {
+    if (value === null || value === undefined) return '';
+    const s = String(value);
+    // Escape double quotes by doubling them, and wrap field in quotes
+    return '"' + s.replace(/"/g, '""') + '"';
+}
+
+function csvLineFromRecord(r: FeedbackData) {
+    return [
+        r.id ?? '',
+        r.rating ?? '',
+        r.feedback_primary ?? '',
+        r.feedback_secondary ?? '',
+        r.consent_to_publish ? 1 : 0,
+        r.display_name ?? '',
+        r.organization ?? '',
+        r.service_category ?? '',
+        r.created_at ?? ''
+    ].map(csvEscape).join(',');
+}
+
+function parseCsvLine(line: string) {
+    const fields: string[] = [];
+    let i = 0;
+    const len = line.length;
+    while (i < len) {
+        let ch = line[i];
+        if (ch === '"') {
+            // quoted field
+            i++;
+            let out = '';
+            while (i < len) {
+                const c = line[i];
+                if (c === '"') {
+                    // check for doubled quote
+                    if (i + 1 < len && line[i + 1] === '"') {
+                        out += '"';
+                        i += 2;
+                        continue;
+                    }
+                    i++;
+                    break;
+                }
+                out += c;
+                i++;
+            }
+            fields.push(out);
+            // skip optional comma
+            if (line[i] === ',') i++;
+        } else {
+            // unquoted field
+            let start = i;
+            while (i < len && line[i] !== ',') i++;
+            fields.push(line.slice(start, i));
+            if (line[i] === ',') i++;
+        }
     }
-    return btoa(result);
+    return fields;
 }
 
-function base64ToUint8Array(base64: string) {
-    const binary = atob(base64);
-    const len = binary.length;
-    const u8 = new Uint8Array(len);
-    for (let i = 0; i < len; i++) u8[i] = binary.charCodeAt(i);
-    return u8;
+function readAllLines(): string[] {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return [];
+    // split into lines, ignore empty
+    return raw.split('\n').filter(l => l.trim().length > 0);
 }
 
-async function initSql() {
-    if (SQL) return SQL;
-    // Load the browser-specific wasm bundle from `public/` so the app serves the
-    // correct file that matches the JS wrapper. We'll place
-    // `sql-wasm-browser.wasm` in `public/`.
-    SQL = await initSqlJs({ locateFile: () => '/sql-wasm-browser.wasm' });
-    return SQL;
+function writeAllLines(lines: string[]) {
+    localStorage.setItem(STORAGE_KEY, lines.join('\n'));
 }
 
-async function openDb() {
-    if (db) return db;
-    await initSql();
-    const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved) {
-        const u8 = base64ToUint8Array(saved);
-        db = new SQL!.Database(u8);
-    } else {
-        db = new SQL!.Database();
-        db.run(`CREATE TABLE IF NOT EXISTS feedback (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            rating INTEGER NOT NULL,
-            feedback_primary TEXT NOT NULL,
-            feedback_secondary TEXT,
-            consent_to_publish INTEGER DEFAULT 0,
-            display_name TEXT,
-            organization TEXT,
-            service_category TEXT,
-            created_at TEXT NOT NULL
-        );`);
-        persist();
-    }
-    return db;
-}
-
-function persist() {
-    if (!db) return;
-    const u8 = db.export();
-    const b64 = uint8ArrayToBase64(u8);
-    localStorage.setItem(STORAGE_KEY, b64);
+function nextId() {
+    const raw = localStorage.getItem(ID_SEQ_KEY);
+    let v = raw ? Number(raw) : 0;
+    v = (isNaN(v) ? 0 : v) + 1;
+    localStorage.setItem(ID_SEQ_KEY, String(v));
+    return v;
 }
 
 export const submitFeedback = async (data: FeedbackData) => {
-    const database = await openDb();
-    const created_at = new Date().toISOString();
-    // Basic validation to prevent NOT NULL constraint failures
-    if (data == null) throw new Error('Missing feedback data');
-    if (!Number.isInteger(data.rating) || data.rating < 1 || data.rating > 5) {
+    if (!data) throw new Error('Missing feedback data');
+    const ratingVal = Number(data.rating);
+    if (!Number.isInteger(ratingVal) || ratingVal < 1 || ratingVal > 5) {
         throw new Error('Invalid or missing `rating` - expected integer 1..5');
     }
     if (!data.feedback_primary || String(data.feedback_primary).trim().length === 0) {
         throw new Error('`feedback_primary` is required');
     }
-    // Coerce rating to integer and ensure required fields are present
-    const ratingVal = Number(data.rating);
-    if (!Number.isInteger(ratingVal) || ratingVal < 1 || ratingVal > 5) {
-        throw new Error('Invalid or missing `rating` - expected integer 1..5');
+
+    if (useRemote) {
+        // send to remote API (expect JSON response { id, created_at })
+        const payload = {
+            rating: ratingVal,
+            feedback_primary: data.feedback_primary,
+            feedback_secondary: data.feedback_secondary || '',
+            consent_to_publish: !!data.consent_to_publish,
+            display_name: data.display_name ?? '',
+            organization: data.organization ?? '',
+            service_category: data.service_category ?? '',
+        };
+        const resp = await fetch(`${REMOTE_API_BASE.replace(/\/$/, '')}/feedback`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+        if (!resp.ok) throw new Error(`Remote API error: ${resp.status}`);
+        return await resp.json();
     }
 
-    // Use `run` which is simpler and compatible across sql.js builds.
-    try {
-        database.run(
-        `INSERT INTO feedback (rating, feedback_primary, feedback_secondary, consent_to_publish, display_name, organization, service_category, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?);`,
-        [
-            ratingVal,
-            data.feedback_primary,
-            data.feedback_secondary || null,
-            data.consent_to_publish ? 1 : 0,
-            data.display_name || null,
-            data.organization || null,
-            data.service_category || null,
-            created_at,
-        ]
-    );
-    } catch (err: any) {
-        // translate common SQL errors into friendlier messages
-        const msg = err && err.message ? String(err.message) : 'Database error';
-        throw new Error(msg.includes('NOT NULL') ? 'Missing required field. Please complete all required inputs.' : msg);
+    const id = nextId();
+    const created_at = new Date().toISOString();
+    const rec: FeedbackData = {
+        id,
+        rating: ratingVal,
+        feedback_primary: data.feedback_primary,
+        feedback_secondary: data.feedback_secondary || '',
+        consent_to_publish: !!data.consent_to_publish,
+        display_name: data.display_name ?? '',
+        organization: data.organization ?? '',
+        service_category: data.service_category ?? '',
+        created_at,
+    };
+
+    const lines = readAllLines();
+    // If empty, add header first
+    if (lines.length === 0) {
+        lines.push('id,rating,feedback_primary,feedback_secondary,consent_to_publish,display_name,organization,service_category,created_at');
     }
-    persist();
-    // return inserted row id (may be 0 on some builds if rowid handling differs)
-    const res = database.exec('SELECT last_insert_rowid() as id');
-    const id = res && res[0] && res[0].values && res[0].values[0] ? res[0].values[0][0] : undefined;
+    lines.push(csvLineFromRecord(rec));
+    writeAllLines(lines);
     return { id, created_at };
 };
 
-// Helper for debugging stored rows count
-export const debugCount = async () => {
-    const database = await openDb();
-    const res = database.exec('SELECT COUNT(*) AS cnt FROM feedback;');
-    if (!res || res.length === 0) return { cnt: 0 };
-    const val = res[0].values && res[0].values[0] ? res[0].values[0][0] : 0;
-    return { cnt: val };
-};
+import pg from 'pg';
+
+const { Pool } = pg;
+const pool = new Pool({
+    host: process.env.PGHOST,
+    user: process.env.PGUSER,
+    password: process.env.PGPASSWORD,
+    database: process.env.PGDATABASE,
+    port: process.env.PGPORT ? Number(process.env.PGPORT) : 5432,
+    ssl: { rejectUnauthorized: true },
+});
 
 export const getAllFeedback = async (): Promise<FeedbackData[]> => {
-    const database = await openDb();
-    const res = database.exec('SELECT id, rating, feedback_primary, feedback_secondary, consent_to_publish, display_name, organization, service_category, created_at FROM feedback ORDER BY created_at DESC;');
-    if (!res || res.length === 0) return [];
-    const result = res[0];
-    const cols = result?.columns ?? [];
-    const rows = result?.values ?? [];
-    if (!Array.isArray(cols) || cols.length === 0 || !Array.isArray(rows) || rows.length === 0) return [];
-    return rows.map((r: any[]) => {
-        const obj: any = {};
-        cols.forEach((c: string, i: number) => (obj[c] = r[i]));
-        obj.consent_to_publish = !!obj.consent_to_publish;
-        return obj as FeedbackData;
-    });
+    const client = await pool.connect();
+    try {
+        console.log('Fetching feedback from database...');
+        const result = await client.query('SELECT * FROM feedback ORDER BY created_at DESC');
+        console.log('Fetched rows:', result.rows.length);
+        return result.rows.map(row => ({
+            id: row.id,
+            rating: row.rating,
+            feedback_primary: row.feedback_primary,
+            feedback_secondary: row.feedback_secondary,
+            consent_to_publish: row.consent_to_publish,
+            display_name: row.display_name,
+            organization: row.organization,
+            service_category: row.service_category,
+            created_at: row.created_at,
+        }));
+    } catch (error) {
+        console.error('Error fetching feedback from database:', error);
+        throw new Error('Failed to fetch feedback from database.');
+    } finally {
+        client.release();
+    }
+};
+
+export const debugCount = async () => {
+    const rows = await getAllFeedback();
+    return { cnt: rows.length };
 };
 
 export const clearDatabase = async () => {
-    db = null;
     localStorage.removeItem(STORAGE_KEY);
+    localStorage.removeItem(ID_SEQ_KEY);
 };
 
-// DEV DEBUG HELPERS: expose some functions to window for quick inspection during development
+export const exportCsv = async () => {
+    return localStorage.getItem(STORAGE_KEY) || '';
+};
+
+// Expose dev helpers for convenience
 if (typeof window !== 'undefined') {
     try {
         (window as any).__feedbackApi = (window as any).__feedbackApi || {};
-        (window as any).__feedbackApi.debugCount = debugCount;
-        (window as any).__feedbackApi.getAllFeedback = getAllFeedback;
         (window as any).__feedbackApi.submitFeedback = submitFeedback;
+        (window as any).__feedbackApi.getAllFeedback = getAllFeedback;
+        (window as any).__feedbackApi.debugCount = debugCount;
         (window as any).__feedbackApi.clearDatabase = clearDatabase;
-        (window as any).__feedbackApi.exportDbBase64 = async () => {
-            const database = await openDb();
-            const u8 = database.export();
-            return uint8ArrayToBase64(u8);
-        };
+        (window as any).__feedbackApi.exportCsv = exportCsv;
     } catch (e) {
-        // no-op in non-browser environments
+        // noop
     }
 }
-
